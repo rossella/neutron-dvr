@@ -125,8 +125,8 @@ class L3_NAT_db_mixin(l3.RouterPluginBase):
             self._apply_dict_extend_functions(l3.ROUTERS, res, router)
         return self._fields(res, fields)
 
-    def _create_router_db(self, context, router, tenant_id, gw_info):
-        """Create the DB object and update gw info, if available."""
+    def _create_router_db(self, context, router, tenant_id):
+        """Create the DB object."""
         with context.session.begin(subtransactions=True):
             # pre-generate id so it will be available when
             # configuring external gw port
@@ -143,7 +143,7 @@ class L3_NAT_db_mixin(l3.RouterPluginBase):
         gw_info = r.pop(EXTERNAL_GW_INFO, None)
         tenant_id = self._get_tenant_id_for_create(context, r)
         with context.session.begin(subtransactions=True):
-            router_db = self._create_router_db(context, r, tenant_id, gw_info)
+            router_db = self._create_router_db(context, r, tenant_id)
             if gw_info:
                 self._update_router_gw_info(context, router_db['id'],
                                             gw_info, router=router_db)
@@ -1017,10 +1017,7 @@ class L3_NAT_db_mixin(l3.RouterPluginBase):
                 else:
                     port['extra_subnets'].append(subnet_info)
 
-    def _process_sync_data(self, routers, interfaces, floating_ips):
-        routers_dict = {}
-        for router in routers:
-            routers_dict[router['id']] = router
+    def _process_floating_ips(self, context, routers_dict, floating_ips):
         for floating_ip in floating_ips:
             router = routers_dict.get(floating_ip['router_id'])
             if router:
@@ -1028,13 +1025,14 @@ class L3_NAT_db_mixin(l3.RouterPluginBase):
                                                 [])
                 router_floatingips.append(floating_ip)
                 router[l3_constants.FLOATINGIP_KEY] = router_floatingips
+
+    def _process_interfaces(self, routers_dict, interfaces):
         for interface in interfaces:
             router = routers_dict.get(interface['device_id'])
             if router:
                 router_interfaces = router.get(l3_constants.INTERFACE_KEY, [])
                 router_interfaces.append(interface)
                 router[l3_constants.INTERFACE_KEY] = router_interfaces
-        return routers_dict.values()
 
     def _get_router_info_list(self, context, router_ids=None, active=None,
                               device_owners=None):
@@ -1052,4 +1050,7 @@ class L3_NAT_db_mixin(l3.RouterPluginBase):
     def get_sync_data(self, context, router_ids=None, active=None):
         routers, interfaces, floating_ips = self._get_router_info_list(
             context, router_ids=router_ids, active=active)
-        return self._process_sync_data(routers, interfaces, floating_ips)
+        routers_dict = dict((router['id'], router) for router in routers)
+        self._process_floating_ips(context, routers_dict, floating_ips)
+        self._process_interfaces(routers_dict, interfaces)
+        return routers_dict.values()

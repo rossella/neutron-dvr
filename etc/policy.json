@@ -63,7 +63,9 @@
     "delete_port": "rule:admin_or_owner",
 
     "create_router:external_gateway_info:enable_snat": "rule:admin_only",
+    "create_router:distributed": "rule:admin_only",
     "update_router:external_gateway_info:enable_snat": "rule:admin_only",
+    "update_router:distributed": "rule:admin_only",
 
     "create_firewall": "",
     "get_firewall": "rule:admin_or_owner",

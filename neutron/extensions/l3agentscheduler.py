@@ -167,8 +167,18 @@ class RouterReschedulingFailed(exceptions.Conflict):
 
 
 class RouterNotHostedByL3Agent(exceptions.Conflict):
-    message = _("The router %(router_id)s is not hosted"
-                " by L3 agent %(agent_id)s.")
+    message = _("The router %(router_id)s is not hosted "
+                "by L3 agent %(agent_id)s.")
+
+
+class RouterL3AgentMismatch(exceptions.Conflict):
+    message = _("Cannot host %(router_type)s router %(router_id)s "
+                "on %(agent_mode)s L3 agent %(agent_id)s.")
+
+
+class RemoveFloatingIPforRouter(exceptions.Conflict):
+    message = _("Disassociate the floating-ip before removing "
+                "router %(router_id)s from the L3 agent %(agent_id)s.")
 
 
 class L3AgentSchedulerPluginBase(object):

@@ -31,6 +31,7 @@ from neutron.db import db_base_plugin_v2
 from neutron.db import external_net_db
 from neutron.db import l3_agentschedulers_db
 from neutron.db import l3_db
+from neutron.db import l3_dvr_db
 from neutron.db import l3_rpc_base
 from neutron.db import model_base
 from neutron.extensions import external_net
@@ -284,6 +285,7 @@ class TestNoL3NatPlugin(TestL3NatBasePlugin):
 # A L3 routing service plugin class for tests with plugins that
 # delegate away L3 routing functionality
 class TestL3NatServicePlugin(db_base_plugin_v2.CommonDbMixin,
+                             l3_dvr_db.L3_NAT_with_dvr_db_mixin,
                              l3_db.L3_NAT_db_mixin):
 
     supported_extension_aliases = ["router"]
@@ -1222,7 +1224,7 @@ class L3NatTestCaseBase(L3NatTestCaseMixin):
         self._show('floatingips', fip['floatingip']['id'],
                    expected_code=exc.HTTPNotFound.code)
 
-    def _test_floatingip_with_assoc_fails(self, plugin_class):
+    def _test_floatingip_with_assoc_fails(self, plugin_method):
         with self.subnet(cidr='200.0.0.0/24') as public_sub:
             self._set_net_external(public_sub['subnet']['network_id'])
             with self.port() as private_port:
@@ -1235,8 +1237,7 @@ class L3NatTestCaseBase(L3NatTestCaseMixin):
                     self._router_interface_action('add', r['router']['id'],
                                                   private_sub['subnet']['id'],
                                                   None)
-                    method = plugin_class + '._update_fip_assoc'
-                    with mock.patch(method) as pl:
+                    with mock.patch(plugin_method) as pl:
                         pl.side_effect = n_exc.BadRequest(
                             resource='floatingip',
                             msg='fake_error')
@@ -1259,7 +1260,7 @@ class L3NatTestCaseBase(L3NatTestCaseMixin):
 
     def test_floatingip_with_assoc_fails(self):
         self._test_floatingip_with_assoc_fails(
-            'neutron.db.l3_db.L3_NAT_db_mixin')
+            'neutron.db.l3_db.L3_NAT_db_mixin._check_and_get_fip_assoc')
 
     def _test_floatingip_with_ip_generation_failure(self, plugin_class):
         with self.subnet(cidr='200.0.0.0/24') as public_sub:

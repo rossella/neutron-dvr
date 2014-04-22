@@ -33,6 +33,7 @@ from neutron.db import db_base_plugin_v2
 from neutron.db import dvr_mac_db
 from neutron.db import external_net_db
 from neutron.db import extradhcpopt_db
+from neutron.db import l3_dvrscheduler_db
 from neutron.db import models_v2
 from neutron.db import quota_db  # noqa
 from neutron.db import securitygroups_rpc_base as sg_db_rpc
@@ -70,7 +71,8 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
                 sg_db_rpc.SecurityGroupServerRpcMixin,
                 agentschedulers_db.DhcpAgentSchedulerDbMixin,
                 addr_pair_db.AllowedAddressPairsMixin,
-                extradhcpopt_db.ExtraDhcpOptMixin):
+                extradhcpopt_db.ExtraDhcpOptMixin,
+                l3_dvrscheduler_db.L3_DVRsch_db_mixin):
 
     """Implement the Neutron L2 abstractions using modules.
 
@@ -210,7 +212,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
         # TODO(rkukura): Implement filtering.
         return nets
 
-    def _process_port_binding(self, mech_context, attrs):
+    def _process_port_binding(self, mech_context, context, attrs):
         binding = mech_context._binding
         port = mech_context.current
         self._update_port_dict_binding(port, binding)
@@ -245,6 +247,8 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
         if host_set:
             binding.host = host
             port[portbindings.HOST_ID] = host
+            if "compute:" in port['device_owner']:
+                self.dvr_update_router_addvm(context, port)
 
         if vnic_type_set:
             binding.vnic_type = vnic_type
@@ -688,7 +692,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
                 mech_context = driver_context.PortContext(self, context,
                                                           result,
                                                           network)
-                self._process_port_binding(mech_context, attrs)
+                self._process_port_binding(mech_context, context, attrs)
 
             result[addr_pair.ADDRESS_PAIRS] = (
                 self._process_create_allowed_address_pairs(
@@ -739,7 +743,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
                 self, context, updated_port, network,
                 original_port=original_port)
             need_port_update_notify |= self._process_port_binding(
-                mech_context, attrs)
+                mech_context, context, attrs)
             self.mechanism_manager.update_port_precommit(mech_context)
 
         # TODO(apech) - handle errors raised by update_port, potentially
@@ -822,6 +826,8 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
             else:
                 mech_context = driver_context.PortContext(self, context, port,
                                                           network)
+                if "compute:" in port['device_owner']:
+                    self.dvr_deletens_ifnovm(context, id)
                 self.mechanism_manager.delete_port_precommit(mech_context)
                 self._delete_port_security_group_bindings(context, id)
             LOG.debug("Calling delete_port for %(port_id)s owned by %(owner)s"
@@ -829,6 +835,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
             if l3plugin:
                 router_ids = l3plugin.disassociate_floatingips(
                     context, id, do_notify=False)
+                l3plugin.dvr_vmarp_table_update(context, id, "del")
 
             super(Ml2Plugin, self).delete_port(context, id)
 

@@ -762,7 +762,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
             LOG.error(_("mechanism_manager.delete_port_postcommit failed"))
         self.notify_security_groups_member_updated(context, port)
 
-    def update_port_status(self, context, port_id, status):
+    def update_port_status(self, context, port_id, status, host=None):
         updated = False
         session = context.session
         # REVISIT: Serialize this operation with a semaphore to prevent
@@ -791,6 +791,6 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
 
         return True
 
-    def port_bound_to_host(self, port_id, host):
+    def port_bound_to_host(self, context, port_id, host):
         port_host = db.get_port_binding_host(port_id)
         return (port_host == host)

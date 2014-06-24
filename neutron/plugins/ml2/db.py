@@ -15,6 +15,7 @@
 
 from sqlalchemy.orm import exc
 
+from neutron.common import constants as n_const
 from neutron.db import api as db_api
 from neutron.db import models_v2
 from neutron.db import securitygroups_db as sg_db
@@ -68,6 +69,31 @@ def ensure_port_binding(session, port_id):
                 vif_type=portbindings.VIF_TYPE_UNBOUND)
             session.add(record)
         return record
+
+
+def ensure_dvr_port_binding(session, port_id, host, router_id=None):
+    # FIXME(armando-migliaccio): take care of LP #1335226
+    with session.begin(subtransactions=True):
+        try:
+            record = (session.query(models.DVRPortBinding).
+                      filter_by(port_id=port_id, host=host).one())
+        except exc.NoResultFound:
+            record = models.DVRPortBinding(
+                port_id=port_id,
+                host=host,
+                router_id=router_id,
+                vif_type=portbindings.VIF_TYPE_UNBOUND,
+                vnic_type=portbindings.VNIC_NORMAL,
+                cap_port_filter=False,
+                status=n_const.PORT_STATUS_DOWN)
+            session.add(record)
+        return record
+
+
+def delete_dvr_port_binding(session, port_id, host):
+    with session.begin(subtransactions=True):
+        session.query(models.DVRPortBinding).filter_by(
+            port_id=port_id, host=host).delete()
 
 
 def get_port(session, port_id):
@@ -134,3 +160,41 @@ def get_port_binding_host(port_id):
                       {'port_id': port_id})
             return
     return query.host
+
+
+def generate_dvr_port_status(session, port_id):
+    # an OR'ed value of status assigned to parent port from the
+    # dvrportbinding bucket
+    query = session.query(models.DVRPortBinding)
+    bindings = query.filter(models.DVRPortBinding.port_id == port_id).all()
+    for bind in bindings:
+        if bind.status == n_const.PORT_STATUS_ACTIVE:
+            return n_const.PORT_STATUS_ACTIVE
+    for bind in bindings:
+        if bind.status == n_const.PORT_STATUS_DOWN:
+            return n_const.PORT_STATUS_DOWN
+    return n_const.PORT_STATUS_BUILD
+
+
+def get_dvr_port_binding_by_host(port_id, host, session=None):
+    if not session:
+        session = db_api.get_session()
+    with session.begin(subtransactions=True):
+        binding = (session.query(models.DVRPortBinding).
+                   filter(models.DVRPortBinding.port_id.startswith(port_id),
+                          models.DVRPortBinding.host == host).first())
+    if not binding:
+        LOG.debug("No binding for DVR port %(port_id)s with host "
+                  "%(host)s", {'port_id': port_id, 'host': host})
+    return binding
+
+
+def get_dvr_port_bindings(port_id):
+    session = db_api.get_session()
+    with session.begin(subtransactions=True):
+        bindings = (session.query(models.DVRPortBinding).
+                    filter(models.DVRPortBinding.port_id.startswith(port_id)).
+                    all())
+    if not bindings:
+        LOG.debug("No bindings for port %s", port_id)
+    return bindings

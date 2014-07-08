@@ -14,6 +14,7 @@
 #    under the License.
 
 from neutron.agent import securitygroups_rpc as sg_rpc
+from neutron.api.rpc import dvr_rpc
 from neutron.common import constants as q_const
 from neutron.common import rpc as n_rpc
 from neutron.common import topics
@@ -37,14 +38,16 @@ TAP_DEVICE_PREFIX_LENGTH = 3
 
 class RpcCallbacks(n_rpc.RpcCallback,
                    dhcp_rpc_base.DhcpRpcCallbackMixin,
+                   dvr_rpc.DVRServerRpcCallbackMixin,
                    sg_db_rpc.SecurityGroupServerRpcCallbackMixin,
                    type_tunnel.TunnelRpcCallbackMixin):
 
-    RPC_API_VERSION = '1.2'
+    RPC_API_VERSION = '1.3'
     # history
     #   1.0 Initial version (from openvswitch/linuxbridge)
     #   1.1 Support Security Group RPC
     #   1.2 Support get_devices_details_list
+    #   1.3 Support Distributed Virtual Router (DVR)
 
     def __init__(self, notifier, type_manager):
         self.setup_tunnel_callback_mixin(notifier, type_manager)
@@ -78,9 +81,10 @@ class RpcCallbacks(n_rpc.RpcCallback,
         """Agent requests device details."""
         agent_id = kwargs.get('agent_id')
         device = kwargs.get('device')
-        LOG.debug(_("Device %(device)s details requested by agent "
-                    "%(agent_id)s"),
-                  {'device': device, 'agent_id': agent_id})
+        host = kwargs.get('host')
+        LOG.debug("Device %(device)s details requested by agent "
+                  "%(agent_id)s with host %(host)s",
+                  {'device': device, 'agent_id': agent_id, 'host': host})
         port_id = self._device_to_port_id(device)
 
         session = db_api.get_session()
@@ -102,7 +106,11 @@ class RpcCallbacks(n_rpc.RpcCallback,
                              'network_id': port.network_id})
                 return {'device': device}
 
-            binding = db.ensure_port_binding(session, port.id)
+            if port['device_owner'] == q_const.DEVICE_OWNER_DVR_INTERFACE:
+                binding = db.ensure_dvr_port_binding(session, port_id, host)
+            else:
+                binding = db.ensure_port_binding(session, port.id)
+
             if not binding.segment:
                 LOG.warning(_("Device %(device)s requested by agent "
                               "%(agent_id)s on network %(network_id)s not "
@@ -130,7 +138,8 @@ class RpcCallbacks(n_rpc.RpcCallback,
                 plugin = manager.NeutronManager.get_plugin()
                 plugin.update_port_status(rpc_context,
                                           port_id,
-                                          new_status)
+                                          new_status,
+                                          host)
                 port.status = new_status
             entry = {'device': device,
                      'network_id': port.network_id,
@@ -138,7 +147,9 @@ class RpcCallbacks(n_rpc.RpcCallback,
                      'admin_state_up': port.admin_state_up,
                      'network_type': segment[api.NETWORK_TYPE],
                      'segmentation_id': segment[api.SEGMENTATION_ID],
-                     'physical_network': segment[api.PHYSICAL_NETWORK]}
+                     'physical_network': segment[api.PHYSICAL_NETWORK],
+                     'fixed_ips': port['fixed_ips'],
+                     'device_owner': port['device_owner']}
             LOG.debug(_("Returning: %s"), entry)
             return entry
 
@@ -169,7 +180,8 @@ class RpcCallbacks(n_rpc.RpcCallback,
         plugin = manager.NeutronManager.get_plugin()
         port_id = self._device_to_port_id(device)
         port_exists = True
-        if (host and not plugin.port_bound_to_host(port_id, host)):
+        if (host and not plugin.port_bound_to_host(rpc_context,
+                                                   port_id, host)):
             LOG.debug(_("Device %(device)s not bound to the"
                         " agent host %(host)s"),
                       {'device': device, 'host': host})
@@ -177,7 +189,8 @@ class RpcCallbacks(n_rpc.RpcCallback,
                     'exists': port_exists}
 
         port_exists = plugin.update_port_status(rpc_context, port_id,
-                                                q_const.PORT_STATUS_DOWN)
+                                                q_const.PORT_STATUS_DOWN,
+                                                host)
 
         return {'device': device,
                 'exists': port_exists}
@@ -191,17 +204,38 @@ class RpcCallbacks(n_rpc.RpcCallback,
                   {'device': device, 'agent_id': agent_id})
         plugin = manager.NeutronManager.get_plugin()
         port_id = self._device_to_port_id(device)
-        if (host and not plugin.port_bound_to_host(port_id, host)):
+        if (host and not plugin.port_bound_to_host(rpc_context,
+                                                   port_id, host)):
             LOG.debug(_("Device %(device)s not bound to the"
                         " agent host %(host)s"),
                       {'device': device, 'host': host})
             return
 
         plugin.update_port_status(rpc_context, port_id,
-                                  q_const.PORT_STATUS_ACTIVE)
+                                  q_const.PORT_STATUS_ACTIVE,
+                                  host)
+
+    def get_dvr_mac_address_by_host(self, rpc_context, **kwargs):
+        host = kwargs.get('host')
+        LOG.debug("DVR Agent requests mac_address for host %r", host)
+        return super(RpcCallbacks, self).get_dvr_mac_address_by_host(
+            rpc_context, host)
+
+    def get_compute_ports_on_host_by_subnet(self, rpc_context, **kwargs):
+        host = kwargs.get('host')
+        subnet = kwargs.get('subnet')
+        LOG.debug("DVR Agent requests list of VM ports on host %r", host)
+        return super(RpcCallbacks, self).get_compute_ports_on_host_by_subnet(
+            rpc_context, host, subnet)
+
+    def get_subnet_for_dvr(self, rpc_context, **kwargs):
+        subnet = kwargs.get('subnet')
+        return super(RpcCallbacks, self).get_subnet_for_dvr(rpc_context,
+                                                            subnet)
 
 
 class AgentNotifierApi(n_rpc.RpcProxy,
+                       dvr_rpc.DVRAgentRpcApiMixin,
                        sg_rpc.SecurityGroupAgentRpcApiMixin,
                        type_tunnel.TunnelAgentRpcApiMixin):
     """Agent side of the openvswitch rpc API.

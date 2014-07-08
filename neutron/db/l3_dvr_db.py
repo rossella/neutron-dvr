@@ -12,6 +12,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from sqlalchemy.orm import exc
+
 from oslo.config import cfg
 
 from neutron.api.v2 import attributes
@@ -19,7 +21,9 @@ from neutron.common import constants as l3_const
 from neutron.common import exceptions as n_exc
 from neutron.db import l3_attrs_db
 from neutron.db import l3_db
+from neutron.db import l3_dvrscheduler_db as l3_dvrsched_db
 from neutron.db import models_v2
+from neutron.extensions import l3
 from neutron.extensions import portbindings
 from neutron.openstack.common import log as logging
 
@@ -148,6 +152,24 @@ class L3_NAT_with_dvr_db_mixin(l3_db.L3_NAT_db_mixin,
         if interfaces:
             self._populate_subnet_for_ports(context, interfaces)
         return interfaces
+
+    def _build_routers_list(self, context, routers, gw_ports):
+        for rtr in routers:
+            gw_port_id = rtr['gw_port_id']
+            if gw_port_id:
+                rtr['gw_port'] = gw_ports[gw_port_id]
+                # Add enable_snat key
+                rtr['enable_snat'] = rtr[l3.EXTERNAL_GW_INFO]['enable_snat']
+                query = (context.session.
+                         query(l3_dvrsched_db.CentralizedSnatL3AgentBinding).
+                         filter_by(router_id=rtr['id']))
+                try:
+                    binding = query.one()
+                    rtr['gw_port_host'] = binding.l3_agent.host
+                except exc.NoResultFound:
+                    rtr['gw_port_host'] = None
+                    LOG.debug('no snat is bound to router %s', rtr['id'])
+        return routers
 
     def _process_routers(self, context, routers):
         routers_dict = {}

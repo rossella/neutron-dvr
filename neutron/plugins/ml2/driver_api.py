@@ -206,6 +206,11 @@ class PortContext(object):
     """
 
     @abc.abstractproperty
+    def binding(self):
+        """Return the current state of binding for this port."""
+        pass
+
+    @abc.abstractproperty
     def current(self):
         """Return the current state of the port.
 

@@ -42,26 +42,44 @@ class L2populationMechanismDriver(api.MechanismDriver,
         LOG.debug(_("Experimental L2 population driver"))
         self.rpc_ctx = n_context.get_admin_context_without_session()
         self.migrated_ports = {}
-        self.deleted_ports = {}
+        self.remove_fdb_entries = {}
 
     def _get_port_fdb_entries(self, port):
-        return [[port['mac_address'],
+        return [[port['mac_address'], port['device_owner'],
                  ip['ip_address']] for ip in port['fixed_ips']]
+
+    def _get_agent_host(self, context, port):
+        if port['device_owner'] == const.DEVICE_OWNER_DVR_INTERFACE:
+            agent_host = context.binding.host
+        else:
+            agent_host = port['binding:host_id']
+        return agent_host
 
     def delete_port_precommit(self, context):
         # TODO(matrohon): revisit once the original bound segment will be
         # available in delete_port_postcommit. in delete_port_postcommit
         # agent_active_ports will be equal to 0, and the _update_port_down
         # won't need agent_active_ports_count_for_flooding anymore
-        port_context = context.current
-        fdb_entries = self._update_port_down(context, port_context, 1)
-        self.deleted_ports[context.current['id']] = fdb_entries
+        port = context.current
+        agent_host = self._get_agent_host(context, port)
+
+        if port['id'] not in self.remove_fdb_entries:
+            self.remove_fdb_entries[port['id']] = {}
+
+        self.remove_fdb_entries[port['id']][agent_host] = (
+            self._update_port_down(context, port, 1))
 
     def delete_port_postcommit(self, context):
-        fanout_msg = self.deleted_ports.pop(context.current['id'], None)
-        if fanout_msg:
-            self.L2populationAgentNotify.remove_fdb_entries(
-                self.rpc_ctx, fanout_msg)
+        port = context.current
+        agent_host = self._get_agent_host(context, port)
+
+        if port['id'] in self.remove_fdb_entries:
+            for agent_host in list(self.remove_fdb_entries[port['id']]):
+                self.L2populationAgentNotify.remove_fdb_entries(
+                    self.rpc_ctx,
+                    self.remove_fdb_entries[port['id']][agent_host])
+                self.remove_fdb_entries[port['id']].pop(agent_host, 0)
+            self.remove_fdb_entries.pop(port['id'], 0)
 
     def _get_diff_ips(self, orig, port):
         orig_ips = set([ip['ip_address'] for ip in orig['fixed_ips']])
@@ -80,10 +98,12 @@ class L2populationMechanismDriver(api.MechanismDriver,
         port_infos = self._get_port_infos(context, orig)
         if not port_infos:
             return
-        agent, agent_ip, segment, port_fdb_entries = port_infos
+        agent, agent_host, agent_ip, segment, port_fdb_entries = port_infos
 
-        orig_mac_ip = [[port['mac_address'], ip] for ip in orig_ips]
-        port_mac_ip = [[port['mac_address'], ip] for ip in port_ips]
+        orig_mac_ip = [[port['mac_address'], port['device_owner'], ip]
+                       for ip in orig_ips]
+        port_mac_ip = [[port['mac_address'], port['device_owner'], ip]
+                       for ip in port_ips]
 
         upd_fdb_entries = {port['network_id']: {agent_ip: {}}}
 
@@ -106,30 +126,44 @@ class L2populationMechanismDriver(api.MechanismDriver,
         diff_ips = self._get_diff_ips(orig, port)
         if diff_ips:
             self._fixed_ips_changed(context, orig, port, diff_ips)
-        if (port['binding:host_id'] != orig['binding:host_id']
+        # TODO(vivek): DVR may need more robust handling of binding:host_id key
+        if (port.get('binding:host_id') != orig.get('binding:host_id')
             and port['status'] == const.PORT_STATUS_ACTIVE
             and not self.migrated_ports.get(orig['id'])):
             # The port has been migrated. We have to store the original
             # binding to send appropriate fdb once the port will be set
             # on the destination host
             self.migrated_ports[orig['id']] = orig
+        elif port['device_owner'] == const.DEVICE_OWNER_DVR_INTERFACE:
+            binding = context.binding
+            if binding.status == const.PORT_STATUS_ACTIVE:
+                self._update_port_up(context)
+            if binding.status == const.PORT_STATUS_DOWN:
+                agent_host = binding.host
+                fdb_entries = {agent_host:
+                               self._update_port_down(context, port)}
+                self.L2populationAgentNotify.remove_fdb_entries(
+                    self.rpc_ctx, fdb_entries[agent_host])
         elif port['status'] != orig['status']:
+            agent_host = port['binding:host_id']
             if port['status'] == const.PORT_STATUS_ACTIVE:
                 self._update_port_up(context)
             elif port['status'] == const.PORT_STATUS_DOWN:
-                fdb_entries = self._update_port_down(context, port)
+                fdb_entries = {agent_host: self._update_port_down(context,
+                                                                  port)}
                 self.L2populationAgentNotify.remove_fdb_entries(
-                    self.rpc_ctx, fdb_entries)
+                    self.rpc_ctx, fdb_entries[agent_host])
             elif port['status'] == const.PORT_STATUS_BUILD:
                 orig = self.migrated_ports.pop(port['id'], None)
                 if orig:
                     # this port has been migrated : remove its entries from fdb
-                    fdb_entries = self._update_port_down(context, orig)
+                    fdb_entries = {agent_host: self._update_port_down(context,
+                                                                      orig)}
                     self.L2populationAgentNotify.remove_fdb_entries(
-                        self.rpc_ctx, fdb_entries)
+                        self.rpc_ctx, fdb_entries[agent_host])
 
     def _get_port_infos(self, context, port):
-        agent_host = port['binding:host_id']
+        agent_host = self._get_agent_host(context, port)
         if not agent_host:
             return
 
@@ -157,16 +191,15 @@ class L2populationMechanismDriver(api.MechanismDriver,
 
         fdb_entries = self._get_port_fdb_entries(port)
 
-        return agent, agent_ip, segment, fdb_entries
+        return agent, agent_host, agent_ip, segment, fdb_entries
 
     def _update_port_up(self, context):
         port_context = context.current
         port_infos = self._get_port_infos(context, port_context)
         if not port_infos:
             return
-        agent, agent_ip, segment, port_fdb_entries = port_infos
+        agent, agent_host, agent_ip, segment, port_fdb_entries = port_infos
 
-        agent_host = port_context['binding:host_id']
         network_id = port_context['network_id']
 
         session = db_api.get_session()
@@ -188,8 +221,9 @@ class L2populationMechanismDriver(api.MechanismDriver,
                                   'ports': {}}}
             ports = agent_fdb_entries[network_id]['ports']
 
-            network_ports = self.get_network_ports(session, network_id)
-            for network_port in network_ports:
+            nondvr_network_ports = self.get_nondvr_network_ports(session,
+                                                                 network_id)
+            for network_port in nondvr_network_ports:
                 binding, agent = network_port
                 if agent.host == agent_host:
                     continue
@@ -205,6 +239,22 @@ class L2populationMechanismDriver(api.MechanismDriver,
                 agent_ports += self._get_port_fdb_entries(binding.port)
                 ports[ip] = agent_ports
 
+            dvr_network_ports = self.get_dvr_network_ports(session, network_id)
+            for network_port in dvr_network_ports:
+                binding, agent = network_port
+                if agent.host == agent_host:
+                    continue
+
+                ip = self.get_agent_ip(agent)
+                if not ip:
+                    LOG.debug(_("Unable to retrieve the agent ip, check "
+                                "the agent %(agent_host)s configuration."),
+                              {'agent_host': agent.host})
+                    continue
+
+                agent_ports = ports.get(ip, [const.FLOODING_ENTRY])
+                ports[ip] = agent_ports
+
             # And notify other agents to add flooding entry
             other_fdb_entries[network_id]['ports'][agent_ip].append(
                 const.FLOODING_ENTRY)
@@ -214,7 +264,9 @@ class L2populationMechanismDriver(api.MechanismDriver,
                     self.rpc_ctx, agent_fdb_entries, agent_host)
 
         # Notify other agents to add fdb rule for current port
-        other_fdb_entries[network_id]['ports'][agent_ip] += port_fdb_entries
+        if port_context['device_owner'] != const.DEVICE_OWNER_DVR_INTERFACE:
+            other_fdb_entries[network_id]['ports'][agent_ip] += (
+                port_fdb_entries)
 
         self.L2populationAgentNotify.add_fdb_entries(self.rpc_ctx,
                                                      other_fdb_entries)
@@ -224,9 +276,8 @@ class L2populationMechanismDriver(api.MechanismDriver,
         port_infos = self._get_port_infos(context, port_context)
         if not port_infos:
             return
-        agent, agent_ip, segment, port_fdb_entries = port_infos
+        agent, agent_host, agent_ip, segment, port_fdb_entries = port_infos
 
-        agent_host = port_context['binding:host_id']
         network_id = port_context['network_id']
 
         session = db_api.get_session()
@@ -242,7 +293,10 @@ class L2populationMechanismDriver(api.MechanismDriver,
             # other agents needs to be notified to delete their flooding entry.
             other_fdb_entries[network_id]['ports'][agent_ip].append(
                 const.FLOODING_ENTRY)
-        # Notify other agents to remove fdb rules for current port
-        other_fdb_entries[network_id]['ports'][agent_ip] += port_fdb_entries
+
+        # Notify other agents to remove fdb rule for current port
+        if port_context['device_owner'] != const.DEVICE_OWNER_DVR_INTERFACE:
+            fdb_entries = self._get_port_fdb_entries(port_context)
+            other_fdb_entries[network_id]['ports'][agent_ip] += fdb_entries
 
         return other_fdb_entries

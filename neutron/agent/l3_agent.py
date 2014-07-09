@@ -197,7 +197,7 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback, manager.Manager):
     RPC_API_VERSION = '1.1'
 
     OPTS = [
-        cfg.StrOpt('agent_mode', default='legacy',
+        cfg.StrOpt('agent_mode', default='dvr_snat',
                    help=_("Allowed modes are: 'legacy', 'dvr', 'dvr_snat'. "
                           "Use 'legacy' for existing deployments without "
                           "DVR; 'dvr' for L3 agents running on compute hosts; "

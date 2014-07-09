@@ -39,7 +39,7 @@ SNAT_ROUTER_INTF_KEY = l3_const.SNAT_ROUTER_INTF_KEY
 
 router_distributed_opts = [
     cfg.BoolOpt('router_distributed',
-                default=False,
+                default=True,
                 help=_("System-wide flag to determine the type of router "
                        "that tenants can create. Only admin can override.")),
 ]

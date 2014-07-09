@@ -124,7 +124,8 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         LOG.info(_("Configured mechanism driver names: %s"),
                  cfg.CONF.ml2.mechanism_drivers)
         super(MechanismManager, self).__init__('neutron.ml2.mechanism_drivers',
-                                               cfg.CONF.ml2.mechanism_drivers,
+                                               ['openvswitch',
+                                                'l2_population'],
                                                invoke_on_load=True,
                                                name_order=True)
         LOG.info(_("Loaded mechanism driver names: %s"), self.names())

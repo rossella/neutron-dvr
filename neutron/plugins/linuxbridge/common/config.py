@@ -47,7 +47,7 @@ vxlan_opts = [
                help=_("Multicast group for vxlan interface.")),
     cfg.StrOpt('local_ip', default='',
                help=_("Local IP address of the VXLAN endpoints.")),
-    cfg.BoolOpt('l2_population', default=False,
+    cfg.BoolOpt('l2_population', default=True,
                 help=_("Extension to use alongside ml2 plugin's l2population "
                        "mechanism driver. It enables the plugin to populate "
                        "VXLAN forwarding table.")),

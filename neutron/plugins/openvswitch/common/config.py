@@ -21,7 +21,7 @@ from neutron.plugins.openvswitch.common import constants
 DEFAULT_BRIDGE_MAPPINGS = []
 DEFAULT_VLAN_RANGES = []
 DEFAULT_TUNNEL_RANGES = []
-DEFAULT_TUNNEL_TYPES = []
+DEFAULT_TUNNEL_TYPES = ['vxlan']
 
 ovs_opts = [
     cfg.StrOpt('integration_bridge', default='br-int',
@@ -78,7 +78,7 @@ agent_opts = [
                help=_("The UDP port to use for VXLAN tunnels.")),
     cfg.IntOpt('veth_mtu',
                help=_("MTU size of veth interfaces")),
-    cfg.BoolOpt('l2_population', default=False,
+    cfg.BoolOpt('l2_population', default=True,
                 help=_("Use ml2 l2population mechanism driver to learn "
                        "remote mac and IPs and improve tunnel scalability")),
     cfg.BoolOpt('arp_responder', default=False,
@@ -86,7 +86,7 @@ agent_opts = [
     cfg.BoolOpt('dont_fragment', default=True,
                 help=_("Set or un-set the don't fragment (DF) bit on "
                        "outgoing IP packet carrying GRE/VXLAN tunnel")),
-    cfg.BoolOpt('enable_distributed_routing', default=False,
+    cfg.BoolOpt('enable_distributed_routing', default=True,
                 help=_("Make the l2 agent run in dvr mode ")),
 ]
 
